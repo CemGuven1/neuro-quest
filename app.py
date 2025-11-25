@@ -5,6 +5,7 @@ import random
 import os
 import time
 import pandas as pd
+import uuid
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -118,24 +119,63 @@ class GameLogic:
 
 # --- State Management Helper Functions ---
 
+def get_user_id():
+    """Get or generate a unique user ID for this session."""
+    if 'user_id' not in st.session_state:
+        # Generate a unique ID for this browser session
+        # This persists for the duration of the Streamlit session
+        user_id = str(uuid.uuid4())[:16]
+        st.session_state.user_id = user_id
+    return st.session_state.user_id
+
+def get_player_file_path(user_id=None):
+    """Get the file path for this user's save data."""
+    if user_id is None:
+        user_id = get_user_id()
+    # Create a saves directory to keep things organized
+    saves_dir = 'saves'
+    if not os.path.exists(saves_dir):
+        os.makedirs(saves_dir)
+    return os.path.join(saves_dir, f'neuroai_{user_id}.json')
+
 def load_player():
+    """Load player data from user-specific file."""
     if 'player' not in st.session_state:
-        if os.path.exists('neuroai.json'):
-            with open('neuroai.json', 'r') as f:
-                p = json.load(f)
-                p['last_play'] = p.get('last_play', '')
-                st.session_state.player = p
+        user_id = get_user_id()
+        file_path = get_player_file_path(user_id)
+        
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r') as f:
+                    p = json.load(f)
+                    p['last_play'] = p.get('last_play', '')
+                    st.session_state.player = p
+            except Exception as e:
+                # If file is corrupted, start fresh
+                st.warning("⚠️ Could not load previous save. Starting fresh!")
+                st.session_state.player = create_new_player()
+                st.session_state.player['user_id'] = user_id
         else:
-            st.session_state.player = {
-                "name": "AI Apprentice",
-                "xp": 0, "level": 1, "streak": 0, "last_play": "",
-                "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
-                "total_sessions": 0
-            }
+            st.session_state.player = create_new_player()
+            st.session_state.player['user_id'] = user_id
+
+def create_new_player():
+    """Create a new player profile."""
+    return {
+        "name": "AI Apprentice",
+        "xp": 0, "level": 1, "streak": 0, "last_play": "",
+        "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
+        "total_sessions": 0
+    }
 
 def save_player():
-    with open('neuroai.json', 'w') as f:
-        json.dump(st.session_state.player, f, indent=2)
+    """Save player data to user-specific file."""
+    file_path = get_player_file_path()
+    try:
+        with open(file_path, 'w') as f:
+            json.dump(st.session_state.player, f, indent=2)
+    except Exception as e:
+        st.error(f"⚠️ Could not save progress: {e}")
 
 def update_streak():
     player = st.session_state.player
@@ -204,6 +244,15 @@ player = st.session_state.player
 # --- Sidebar ---
 with st.sidebar:
     st.title(f"👤 {player['name']}")
+    
+    # Username editor
+    with st.expander("✏️ Change Name"):
+        new_name = st.text_input("Your Name", value=player['name'], key="name_input")
+        if st.button("Update Name"):
+            player['name'] = new_name if new_name.strip() else "AI Apprentice"
+            save_player()
+            st.success("Name updated!")
+            st.rerun()
     
     col1, col2 = st.columns(2)
     with col1:
