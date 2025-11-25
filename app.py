@@ -440,6 +440,72 @@ def view_menu():
         st.session_state.current_view = 'daily'
         st.rerun()
 
+def render_grid(position, letter):
+    """Render a 3x3 grid showing the position and letter.
+    If position is 0, shows a reference grid with no active position."""
+    grid_html = """
+    <style>
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        max-width: 400px;
+        margin: 20px auto;
+    }
+    .grid-tile {
+        aspect-ratio: 1;
+        border: 3px solid #4A90E2;
+        border-radius: 10px;
+        background-color: #262730;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        transition: all 0.3s;
+        position: relative;
+    }
+    .grid-tile.active {
+        background-color: #50E3C2;
+        border-color: #FFD700;
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+        transform: scale(1.1);
+    }
+    .tile-number {
+        font-size: 0.9rem;
+        color: #888;
+        margin-bottom: 5px;
+    }
+    .tile-letter {
+        font-size: 2.5rem;
+        color: #FFD700;
+        font-weight: 900;
+        min-height: 3rem;
+    }
+    .grid-tile.active .tile-letter {
+        color: #1a1a1a;
+        font-size: 3rem;
+    }
+    </style>
+    <div class="grid-container">
+    """
+    
+    for i in range(9):
+        pos_num = i + 1
+        is_active = (position > 0 and pos_num == position)
+        active_class = "active" if is_active else ""
+        display_letter = letter if is_active else ""
+        
+        grid_html += f"""
+        <div class="grid-tile {active_class}">
+            <div class="tile-number">{pos_num}</div>
+            <div class="tile-letter">{display_letter}</div>
+        </div>
+        """
+    
+    grid_html += "</div>"
+    return grid_html
+
 def view_memory():
     st.header("🧠 Memory Boost: Dual N-Back")
     
@@ -477,12 +543,12 @@ def view_memory():
         gs['current_pos'] = pos
         gs['current_let'] = let
         
-        # Display temporarily
+        # Display grid with position and letter
         placeholder = st.empty()
         with placeholder.container():
-            st.markdown(f"<h1 style='text-align: center; font-size: 80px;'>{logic.puzzles['positions'][pos-1].split(' ')[0]}</h1>", unsafe_allow_html=True)
-            st.markdown(f"<h2 style='text-align: center; color: yellow;'>{let}</h2>", unsafe_allow_html=True)
-            st.caption("Memorize this...")
+            grid_html = render_grid(pos, let)
+            st.markdown(grid_html, unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; font-size: 1.2rem; margin-top: 20px;'><strong>Memorize this position and letter...</strong></p>", unsafe_allow_html=True)
         
         time.sleep(1.5) # Blocking sleep is okay for short flash
         placeholder.empty()
@@ -492,6 +558,11 @@ def view_memory():
 
     elif gs['phase'] == 'input':
         st.write(f"Trial {gs['current_trial'] + 1} / {gs['trials_total']}")
+        
+        # Show reference grid (empty) to help with position recall
+        reference_grid = render_grid(0, "")  # 0 means no active position
+        st.markdown(reference_grid, unsafe_allow_html=True)
+        st.caption("Reference grid - remember which position and letter you just saw!")
         
         with st.form("memory_input"):
             st.write(f"Does this match the item **{n} steps ago**?")
