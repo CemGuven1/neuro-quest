@@ -5,7 +5,6 @@ import random
 import os
 import time
 import pandas as pd
-import uuid
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -119,100 +118,80 @@ class GameLogic:
 
 # --- State Management Helper Functions ---
 
-def get_user_id():
-    """Get or generate a unique user ID for this session.
-    Uses URL query parameters for persistence across browser sessions."""
-    # Check query parameters first (this persists across page reloads)
-    query_params = st.query_params
-    player_id_from_url = query_params.get("player_id", None)
-    
-    if player_id_from_url:
-        # Use player ID from URL
-        if 'user_id' not in st.session_state or st.session_state.user_id != player_id_from_url:
-            st.session_state.user_id = player_id_from_url
-        return player_id_from_url
-    
-    # No player_id in URL - check session state
-    if 'user_id' in st.session_state:
-        # Set it in query params so it persists
-        st.query_params["player_id"] = st.session_state.user_id
-        return st.session_state.user_id
-    
-    # Generate new user ID and set in both session state and query params
-    user_id = str(uuid.uuid4())[:16]
-    st.session_state.user_id = user_id
-    st.query_params["player_id"] = user_id
-    return user_id
-
-def get_player_file_path(user_id=None):
-    """Get the file path for this user's save data."""
-    if user_id is None:
-        user_id = get_user_id()
-    # Create a saves directory to keep things organized
+def get_saves_dir():
+    """Get the saves directory, creating it if needed."""
     saves_dir = 'saves'
     if not os.path.exists(saves_dir):
         os.makedirs(saves_dir)
-    return os.path.join(saves_dir, f'neuroai_{user_id}.json')
+    return saves_dir
 
-def load_player():
-    """Load player data from user-specific file."""
+def get_save_path(name):
+    """Get the save file path for a given name."""
+    saves_dir = get_saves_dir()
+    # Sanitize name to avoid filesystem issues
+    safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
+    if not safe_name:
+        safe_name = "player"
+    return os.path.join(saves_dir, f'save_{safe_name}.json')
+
+def list_available_saves():
+    """List all available save files."""
+    saves_dir = get_saves_dir()
+    saves = []
+    if os.path.exists(saves_dir):
+        for filename in os.listdir(saves_dir):
+            if filename.startswith('save_') and filename.endswith('.json'):
+                # Extract name from filename: save_<name>.json
+                name = filename[5:-5]  # Remove 'save_' prefix and '.json' suffix
+                saves.append(name)
+    return sorted(saves)
+
+def load_player(name=None):
+    """Load player data. If name is provided, load that save. Otherwise, use session state name."""
+    # Get the name to use
+    if name is None:
+        name = st.session_state.get('player_name', '')
+    
+    if name:
+        save_path = get_save_path(name)
+        if os.path.exists(save_path):
+            with open(save_path, 'r') as f:
+                p = json.load(f)
+                p['last_play'] = p.get('last_play', '')
+                p['save_name'] = name  # Store the save name
+                st.session_state.player = p
+                st.session_state.player_name = name
+                return
+    
+    # No valid save found, create default (but don't overwrite existing player if name is empty)
     if 'player' not in st.session_state:
-        user_id = get_user_id()  # This will set query params if needed
-        file_path = get_player_file_path(user_id)
-        
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, 'r') as f:
-                    p = json.load(f)
-                    p['last_play'] = p.get('last_play', '')
-                    st.session_state.player = p
-                    # If player has a custom player_id, use that for future loads
-                    if 'player_id' in p and p.get('player_id') and p['player_id'] != user_id:
-                        st.session_state.user_id = p['player_id']
-                        st.query_params["player_id"] = p['player_id']
-                        # Migrate file to new name if needed
-                        new_file_path = get_player_file_path(p['player_id'])
-                        if not os.path.exists(new_file_path):
-                            import shutil
-                            shutil.copy(file_path, new_file_path)
-                            file_path = new_file_path
-            except Exception as e:
-                # If file is corrupted, start fresh
-                st.session_state.player = create_new_player()
-                st.session_state.player['user_id'] = user_id
-                if 'player_id' not in st.session_state.player:
-                    st.session_state.player['player_id'] = None
-        else:
-            st.session_state.player = create_new_player()
-            st.session_state.player['user_id'] = user_id
-            if 'player_id' not in st.session_state.player:
-                st.session_state.player['player_id'] = None
-
-def create_new_player():
-    """Create a new player profile."""
-    return {
-        "name": "AI Apprentice",
-        "xp": 0, "level": 1, "streak": 0, "last_play": "",
-        "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
-        "total_sessions": 0,
-        "player_id": None  # Custom player ID user can set for persistence
-    }
+        default_name = name if name else "AI Apprentice"
+        st.session_state.player = {
+            "name": default_name,
+            "xp": 0, "level": 1, "streak": 0, "last_play": "",
+            "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
+            "total_sessions": 0,
+            "save_name": default_name if name else ""
+        }
+        if name:
+            st.session_state.player_name = default_name
 
 def save_player():
-    """Save player data to user-specific file."""
-    # Use player_id if set, otherwise use user_id
-    save_id = st.session_state.player.get('player_id') or st.session_state.get('user_id')
-    if save_id:
-        file_path = get_player_file_path(save_id)
-        try:
-            # Ensure user_id is always saved
-            st.session_state.player['user_id'] = st.session_state.get('user_id')
-            with open(file_path, 'w') as f:
-                json.dump(st.session_state.player, f, indent=2)
-        except Exception as e:
-            st.error(f"⚠️ Could not save progress: {e}")
-    else:
-        st.error("⚠️ No user ID available to save progress!")
+    """Save player data using their name."""
+    if 'player' not in st.session_state:
+        return
+    
+    player = st.session_state.player
+    # Get the save name from player data or session state
+    save_name = player.get('save_name') or st.session_state.get('player_name', player.get('name', 'player'))
+    
+    # Update the name if it changed
+    player['save_name'] = save_name
+    st.session_state.player_name = save_name
+    
+    save_path = get_save_path(save_name)
+    with open(save_path, 'w') as f:
+        json.dump(player, f, indent=2)
 
 def update_streak():
     player = st.session_state.player
@@ -267,8 +246,14 @@ def award_badge(badge):
 if 'game_logic' not in st.session_state:
     st.session_state.game_logic = GameLogic()
 
-# Load player data (this will set up user_id and query params)
-load_player()
+# Initialize player name if not set (first time user)
+if 'player_name' not in st.session_state:
+    st.session_state.player_name = ''
+
+# Load player data (will create default if no name set)
+if 'player' not in st.session_state:
+    load_player()
+
 # Ensure persistence across re-runs for game states
 if 'current_view' not in st.session_state:
     st.session_state.current_view = 'menu'
@@ -281,78 +266,75 @@ player = st.session_state.player
 
 # --- Sidebar ---
 with st.sidebar:
-    st.title(f"👤 {player['name']}")
-    
-    # Username editor
-    with st.expander("✏️ Change Name"):
-        new_name = st.text_input("Your Name", value=player['name'], key="name_input")
-        if st.button("Update Name"):
-            player['name'] = new_name if new_name.strip() else "AI Apprentice"
-            save_player()
-            st.success("Name updated!")
-            st.rerun()
-    
-    # Player ID for persistence
-    with st.expander("🔑 Player ID (For Progress Recovery)"):
-        current_player_id = st.session_state.get('user_id', '')
-        custom_player_id = player.get('player_id', '')
-        
-        st.caption("💡 **Your progress is automatically saved!** Bookmark this page to return to your game.")
-        st.info(f"**Your Player ID:** `{current_player_id}`")
-        
-        if custom_player_id and custom_player_id != current_player_id:
-            st.success(f"📌 **Custom ID Set:** `{custom_player_id}`")
-        
-        # Allow setting a custom player_id
-        custom_id = st.text_input(
-            "Set Custom Player ID (optional)", 
-            value=custom_player_id or '',
-            help="Choose a memorable ID (letters, numbers, hyphens, underscores only)",
-            key="custom_player_id"
+    # Save/Load Section
+    st.markdown("### 💾 Save Game")
+    with st.expander("📁 Manage Saves", expanded=False):
+        # Text input for player name
+        player_name_input = st.text_input(
+            "Enter Player Name:",
+            value=st.session_state.player_name,
+            key="name_input",
+            placeholder="Type your name here..."
         )
         
-        if st.button("💾 Save Custom ID"):
-            if custom_id.strip():
-                # Validate: alphanumeric, hyphens, underscores only
-                if all(c.isalnum() or c in ['-', '_'] for c in custom_id):
-                    old_id = st.session_state.get('user_id')
-                    old_custom_id = player.get('player_id')
-                    
-                    # Update player data
-                    player['player_id'] = custom_id.strip()
-                    st.session_state.user_id = custom_id.strip()
-                    st.query_params["player_id"] = custom_id.strip()
-                    
-                    # Migrate save file if needed
-                    old_file = None
-                    if old_custom_id:
-                        old_file = get_player_file_path(old_custom_id)
-                    elif old_id:
-                        old_file = get_player_file_path(old_id)
-                    
-                    new_file = get_player_file_path(custom_id.strip())
-                    
-                    if old_file and os.path.exists(old_file) and old_file != new_file:
-                        if not os.path.exists(new_file):
-                            import shutil
-                            shutil.copy(old_file, new_file)
-                    
-                    save_player()
-                    st.success("✅ Custom Player ID saved! Your progress is now linked to this ID.")
-                    st.balloons()
+        # List available saves
+        available_saves = list_available_saves()
+        if available_saves:
+            st.markdown("**Available Saves:**")
+            selected_save = st.selectbox(
+                "Load Existing Save:",
+                options=[""] + available_saves,
+                key="save_selector"
+            )
+            
+            if st.button("Load Selected Save"):
+                if selected_save:
+                    st.session_state.player_name = selected_save
+                    load_player(selected_save)
+                    st.success(f"✅ Loaded save: {selected_save}")
                     st.rerun()
                 else:
-                    st.error("❌ Player ID can only contain letters, numbers, hyphens, and underscores.")
-            else:
-                # Clear custom ID
-                if player.get('player_id'):
-                    player['player_id'] = None
-                    save_player()
-                    st.info("Custom Player ID cleared. Using auto-generated ID.")
-                    st.rerun()
+                    st.warning("Please select a save to load!")
         
-        st.markdown("---")
-        st.caption("💾 **Tip:** Bookmark this page or copy the Player ID to recover your progress anytime!")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save Progress"):
+                if player_name_input:
+                    st.session_state.player_name = player_name_input
+                    player['save_name'] = player_name_input
+                    player['name'] = player_name_input
+                    save_player()
+                    st.success(f"✅ Saved as: {player_name_input}")
+                else:
+                    st.error("Please enter a name first!")
+        
+        with col2:
+            if st.button("🆕 New Game"):
+                if player_name_input:
+                    st.session_state.player_name = player_name_input
+                    # Create fresh player data
+                    st.session_state.player = {
+                        "name": player_name_input,
+                        "xp": 0, "level": 1, "streak": 0, "last_play": "",
+                        "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
+                        "total_sessions": 0,
+                        "save_name": player_name_input
+                    }
+                    save_player()
+                    st.success(f"✅ New game started: {player_name_input}")
+                    st.rerun()
+                else:
+                    st.error("Please enter a name first!")
+    
+    st.divider()
+    
+    # Display current player info
+    current_name = st.session_state.player_name or player.get('save_name') or player.get('name', 'No Player Selected')
+    if current_name and current_name != 'No Player Selected':
+        st.title(f"👤 {current_name}")
+    else:
+        st.title("👤 No Player Selected")
+        st.info("Enter a name above to start playing!")
     
     col1, col2 = st.columns(2)
     with col1:
