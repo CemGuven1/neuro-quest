@@ -157,7 +157,8 @@ class NeuroAIQuest:
         self.log("Remember if position OR letter matches N steps back!")
         st.session_state.current_view = 'memory_boost_game'
 
-    def memory_boost_next_trial(self):
+    # The submission logic now takes the user inputs directly
+    def memory_boost_next_trial(self, user_pos, user_let):
         c = st.session_state.current_challenge
         
         if c['current_trial'] == 0:
@@ -166,11 +167,13 @@ class NeuroAIQuest:
         if c['current_trial'] > 0:
             # Score previous trial based on user input from form
             t = c['current_trial'] - 1
-            pos_match = len(c['pos_hist']) >= c['n'] and c['pos_hist'][-1] == c['pos_hist'][-1-c['n']]
-            let_match = len(c['let_hist']) >= c['n'] and c['let_hist'][-1] == c['let_hist'][-1-c['n']]
+            n = c['n']
+            pos_match = len(c['pos_hist']) >= n and c['pos_hist'][-1-n] == c['pos_hist'][-1]
+            let_match = len(c['let_hist']) >= n and c['let_hist'][-1-n] == c['let_hist'][-1]
             
-            user_pos = st.session_state.user_pos_match
-            user_let = st.session_state.user_let_match
+            # Use the inputs passed to the function
+            user_pos = user_pos
+            user_let = user_let
             
             if user_pos == pos_match and user_let == let_match:
                 c['score'] += 5
@@ -179,11 +182,15 @@ class NeuroAIQuest:
                 c['score'] += 2
                 self.log(f"   Trial {t+1}: ✅ Half correct! (+2)")
             else:
-                self.log(f"   Trial {t+1}: ❌ Miss")
+                self.log(f"   Trial {t+1}: ❌ Miss. Correct: Pos={pos_match}, Let={let_match}")
                 
-            # Adaptive difficulty
-            if (c['current_trial']) % 5 == 0:
-                accuracy = (c['score'] / ((c['current_trial']) * 5)) * 100
+            # Adaptive difficulty (only check if it's past the first 5 trials)
+            if (c['current_trial']) >= 5 and (c['current_trial'] % 5 == 0):
+                # Calculate accuracy over the last 5 trials
+                last_five_trials = c['current_trial']
+                score_last_five = sum([5 if c['score'] == 5 else 2 if c['score'] == 2 else 0 for _ in range(last_five_trials)]) # Simplification
+                accuracy = (c['score'] / (c['current_trial'] * 5)) * 100
+                
                 if accuracy > 80 and c['n'] < 5:
                     c['n'] += 1
                     self.log(f"   🎯 Increasing difficulty to N={c['n']}!")
@@ -614,8 +621,8 @@ class NeuroAIQuest:
                 # Score the user's input from the memory trial (t-1)
                 t = c['current_trial'] - 1
                 n = c['n']
-                pos_match = len(c['pos_hist']) >= n and c['pos_hist'][-1] == c['pos_hist'][-1-n]
-                let_match = len(c['let_hist']) >= n and c['let_hist'][-1] == c['let_hist'][-1-n]
+                pos_match = len(c['pos_hist']) >= n and c['pos_hist'][-1-n] == c['pos_hist'][-1]
+                let_match = len(c['let_hist']) >= n and c['let_hist'][-1-n] == c['let_hist'][-1]
                 
                 user_pos = user_inputs.get('user_pos_match', False)
                 user_let = user_inputs.get('user_let_match', False)
@@ -628,7 +635,7 @@ class NeuroAIQuest:
                     trial_score = 2
                     self.log(f"   Trial {t+1}: ✅ Half correct!")
                 else:
-                    self.log(f"   Trial {t+1}: ❌ Miss")
+                    self.log(f"   Trial {t+1}: ❌ Miss. Correct: Pos={pos_match}, Let={let_match}")
                 
                 c['score'] += trial_score
             
@@ -858,7 +865,7 @@ def render_memory_boost_game(game_instance):
     st.title("🧠 Memory Boost (Dual N-Back)")
     st.subheader(f"N={c['n']} | Trial {c['current_trial']}/{c['trials']} | Score: {c['score']}")
     
-    # Display the current stimulus
+    # Check if we are ready to display the first stimulus (after the first click)
     if c['current_trial'] > 0:
         pos_index = c['pos_hist'][-1] - 1
         letter = c['let_hist'][-1]
@@ -868,58 +875,71 @@ def render_memory_boost_game(game_instance):
         grid_html = """
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; width: 300px; margin: 20px auto;">
         """
+        # Create the 3x3 grid
         for i in range(9):
             is_active = (i == pos_index)
-            style = "background-color: #1f77b4; color: white; font-size: 24px; font-weight: bold;" if is_active else "background-color: #0e1117; color: #444; border: 1px solid #444;"
+            # Conditional styling for the active cell
+            style = "background-color: #ff4b4b; color: white; font-size: 24px; font-weight: bold;" if is_active else "background-color: #0e1117; color: #444; border: 1px solid #444;"
             
             # Display the letter only in the active cell
             cell_content = letter if is_active else str(i+1)
             
-            grid_html += f'<div style="{style} padding: 10px; height: 50px; text-align: center; border-radius: 5px;">{cell_content}</div>'
+            grid_html += f'<div style="{style} padding: 10px; height: 50px; text-align: center; border-radius: 5px; display: flex; align-items: center; justify-content: center;">{cell_content}</div>'
         
         grid_html += "</div>"
         st.markdown(grid_html, unsafe_allow_html=True)
+
+        # --- Input form for the CURRENT trial's check (for the stimulus that appeared N trials ago) ---
+
+        # Determine the form key
+        form_key = f"memory_form_{c['current_trial']}"
+        button_label = "Finish Challenge" if c['current_trial'] == c['trials'] else f"Submit Trial {c['current_trial']} & Next Stimulus"
         
-        # Input form for the NEXT trial
-        if c['current_trial'] < c['trials']:
-            with st.form(key=f"memory_form_{c['current_trial']}"):
-                st.markdown(f"#### Trial {c['current_trial']} Check (N={c['n']})")
+        # If this is the first trial (current_trial = 1), there is no check yet, so skip the form
+        if c['current_trial'] > c['n']: 
+            
+            # Check for the submission of the previous trial
+            with st.form(key=form_key):
+                st.markdown(f"#### Trial {c['current_trial'] - 1} Check (For stimulus that appeared {c['n']} steps ago)")
                 
                 col_pos, col_let = st.columns(2)
-                user_pos_match = col_pos.checkbox(f"Position match (N={c['n']} back)?", key='user_pos_match')
-                user_let_match = col_let.checkbox(f"Letter match (N={c['n']} back)?", key='user_let_match')
+                # We use internal keys here which Streamlit automatically manages in session_state upon submission
+                user_pos_match = col_pos.checkbox(f"Position match (N={c['n']} back)?", key=f'check_pos_{c["current_trial"]}')
+                user_let_match = col_let.checkbox(f"Letter match (N={c['n']} back)?", key=f'check_let_{c["current_trial"]}')
                 
-                # Hidden values to ensure state is passed correctly
-                st.session_state.user_pos_match = user_pos_match
-                st.session_state.user_let_match = user_let_match
-                
-                st.form_submit_button(
-                    f"Submit Trial {c['current_trial']} & Start Next", 
+                # IMPORTANT: Use the lambda function to pass the inputs to the core logic on button click
+                submitted = st.form_submit_button(
+                    button_label, 
                     on_click=game_instance.memory_boost_next_trial,
+                    args=[user_pos_match, user_let_match],
                     use_container_width=True
                 )
-        else:
-            # Last trial submission
-            with st.form(key=f"memory_form_{c['current_trial']}"):
-                st.markdown(f"#### Final Trial {c['current_trial']} Check (N={c['n']})")
-                
-                col_pos, col_let = st.columns(2)
-                user_pos_match = col_pos.checkbox(f"Position match (N={c['n']} back)?", key='user_pos_match_final')
-                user_let_match = col_let.checkbox(f"Letter match (N={c['n']} back)?", key='user_let_match_final')
-                
-                st.session_state.user_pos_match = user_pos_match
-                st.session_state.user_let_match = user_let_match
-                
-                st.form_submit_button(
-                    "Finish Challenge", 
-                    on_click=game_instance.memory_boost_next_trial,
-                    use_container_width=True
-                )
+        
+        # If we are past N, but before the end of the trials, we just need a button to move to the next trial
+        elif c['current_trial'] <= c['n'] and c['current_trial'] < c['trials']:
+            # For the first N trials, we just display the stimulus and move on without a match check.
+            st.info(f"Displaying stimulus. Match check will start after trial {c['n']}.")
+            
+            # Create a simple button outside a form just to advance the stimulus during the initial N steps
+            st.button(f"Next Stimulus ({c['current_trial']}/{c['trials']})", 
+                      on_click=game_instance.memory_boost_next_trial, 
+                      args=[False, False], # Pass dummy values since no checking is done
+                      key=f'advance_stimulus_{c["current_trial"]}',
+                      use_container_width=True)
+            
+        elif c['current_trial'] == c['trials']:
+             # This is the very last submission, which needs to be a check. It is handled by the form above.
+             st.info("Last stimulus displayed. Check your matches and click 'Finish Challenge'.")
+
 
     else:
-        # Initial screen to start the first trial
-        st.info("When you start, the position and letter will be displayed for a short time, then you must enter your matches for the previous step.")
-        st.button("Start First Trial", on_click=game_instance.memory_boost_next_trial, use_container_width=True)
+        # Initial screen to start the first trial (current_trial = 0)
+        st.info(f"The Dual N-Back test requires you to track the position and the letter shown on the grid, and report if the current one matches the one from {c['n']} steps back.")
+        # This button starts the first trial (c['current_trial'] becomes 1)
+        st.button("Start First Trial", 
+                  on_click=game_instance.memory_boost_next_trial, 
+                  args=[False, False], # Dummy arguments for the first call
+                  use_container_width=True)
 
     st.markdown("---")
     st.header("Game Log")
@@ -930,12 +950,22 @@ def render_view_switch_game(game_instance):
     
     st.title("🔄 View Switch: Multi-Perspective Puzzle")
     st.subheader(f"Scenario: {c['scenario']}")
-    st.markdown(f"#### Perspective {c['current_view_index']}/{c['num_views']}: **{c['views'][c['current_view_index']-1]}**")
     
+    # Handle the initial click (current_view_index = 0)
+    if c['current_view_index'] == 0:
+        st.info("Click 'Start Analysis' to begin the first perspective.")
+        st.button("Start Analysis", on_click=game_instance.view_switch_next, args=[""], use_container_width=True)
+        st.markdown("---")
+        st.header("Game Log")
+        return
+    
+    # Display the current perspective prompt
     view_index = c['current_view_index'] - 1
-    view_name = c['views'][view_index] if view_index >= 0 else ""
+    view_name = c['views'][view_index]
     
-    with st.form(key="view_switch_form"):
+    st.markdown(f"#### Perspective {c['current_view_index']}/{c['num_views']}: **{view_name}**")
+    
+    with st.form(key=f"view_switch_form_{c['current_view_index']}"):
         response_text = st.text_area(f"What are the key considerations from the **{view_name}** viewpoint?", height=150)
         
         is_final_step = c['current_view_index'] == c['num_views']
@@ -944,13 +974,7 @@ def render_view_switch_game(game_instance):
         submitted = st.form_submit_button(button_label, use_container_width=True)
         
         if submitted:
-            # Check if this is the first submission
-            if c['current_view_index'] == 0:
-                # This should only happen if the user clicks "Next" immediately after the challenge is initialized, 
-                # but we'll use it to ensure the first step is recorded as a response (even if empty)
-                game_instance.view_switch_next(response_text)
-                st.rerun()
-            elif response_text.strip() == "":
+            if response_text.strip() == "":
                  st.error("Please provide an analysis before moving on.")
             else:
                 game_instance.view_switch_next(response_text)
@@ -966,9 +990,17 @@ def render_step_logic_game(game_instance):
     st.title("⚙️ Step Logic: Riddle Breaker")
     st.subheader(f"Riddle: {c['riddle']}")
     
+    # Handle the initial click (current_step = 0)
+    if c['current_step'] == 0:
+        st.info("Click 'Start Logic' to begin breaking down the riddle.")
+        st.button("Start Logic", on_click=game_instance.step_logic_next, args=[""], use_container_width=True)
+        st.markdown("---")
+        st.header("Game Log")
+        return
+
     step_index = c['current_step']
     
-    with st.form(key="step_logic_form"):
+    with st.form(key=f"step_logic_form_{step_index}"):
         response_text = st.text_input(f"Step {step_index}/{c['num_steps']}: Describe the next logical action.")
         
         is_final_step = c['current_step'] == c['num_steps']
@@ -1016,6 +1048,14 @@ def render_meta_cognition_game(game_instance):
     st.title("🤔 Meta-Cognition Training")
     st.subheader(f"💡 Problem: **{c['problem']}**")
     
+    # Handle the initial click (current_mode_index = 0)
+    if c['current_mode_index'] == 0:
+        st.info("Click 'Start Meta-Analysis' to begin applying the first thinking mode.")
+        st.button("Start Meta-Analysis", on_click=game_instance.meta_cognition_next, args=[""], use_container_width=True)
+        st.markdown("---")
+        st.header("Game Log")
+        return
+
     mode_index = c['current_mode_index'] - 1
     
     if mode_index < len(c['selected_modes']):
@@ -1023,7 +1063,7 @@ def render_meta_cognition_game(game_instance):
         st.markdown(f"#### 🔄 Mode {c['current_mode_index']}/{len(c['selected_modes'])}: **{mode_name.upper()}**")
         st.info(mode_desc)
     
-        with st.form(key="meta_cognition_form"):
+        with st.form(key=f"meta_cognition_form_{c['current_mode_index']}"):
             response_text = st.text_area(f"Apply the **{mode_name}** mode to the problem:", height=150)
             
             is_final_step = c['current_mode_index'] == len(c['selected_modes'])
@@ -1046,45 +1086,58 @@ def render_boss_arena_game(game_instance):
     c = st.session_state.current_challenge
     st.title("👑 Boss Arena")
     
+    # Handle the initial click (current_trial = 0)
+    if c['challenge_stage'] == 0 and c['current_trial'] == 0:
+        st.info("The Boss Arena is a multi-stage challenge. Click below to begin the first stage.")
+        st.button("Start Boss Arena", on_click=lambda: game_instance.boss_arena_next(), use_container_width=True)
+        st.markdown("---")
+        st.header("Game Log")
+        return
+
     if c['challenge_stage'] == 0:
-        # --- Memory N-Back (Repeated from memory_boost_game for flow) ---
+        # --- Memory N-Back ---
         
         st.subheader(f"⚡ Challenge 1/3: Lightning Memory (N={c['n']})")
         st.markdown(f"**Trial {c['current_trial']}/{c['trials']}** | Score: {c['score']:.0f}/50")
         
         # Display the current stimulus
-        if c['current_trial'] > 0:
-            pos_index = c['pos_hist'][-1] - 1
-            letter = c['let_hist'][-1]
-            
-            st.markdown("### 🎯 Current Stimulus")
-            col_pos, col_let = st.columns(2)
-            col_pos.metric("Position", pos_index + 1)
-            col_let.metric("Letter", letter)
+        pos_index = c['pos_hist'][-1] - 1
+        letter = c['let_hist'][-1]
+        
+        st.markdown("### 🎯 Current Stimulus")
+        col_pos, col_let = st.columns(2)
+        col_pos.metric("Position", pos_index + 1)
+        col_let.metric("Letter", letter)
 
-            # Input form for the NEXT trial
-            with st.form(key=f"boss_memory_form_{c['current_trial']}"):
-                st.markdown("#### Submit Match for Previous Stimulus")
+        # Input form for the NEXT trial
+        form_key = f"boss_memory_form_{c['current_trial']}"
+        button_label = "Finish Memory Stage" if c['current_trial'] == c['trials'] else "Submit & Next Stimulus"
+
+        # Check only for the trials where checking is necessary (i.e., past N)
+        if c['current_trial'] > c['n']:
+            with st.form(key=form_key):
+                st.markdown(f"#### Submit Match for Previous Stimulus")
                 
                 col_pos_check, col_let_check = st.columns(2)
-                user_pos_match = col_pos_check.checkbox(f"Position match (N={c['n']} back)?", key='boss_user_pos_match')
-                user_let_match = col_let_check.checkbox(f"Letter match (N={c['n']} back)?", key='boss_user_let_match')
+                # Use unique keys within the form
+                user_pos_match = col_pos_check.checkbox(f"Position match (N={c['n']} back)?", key=f'boss_check_pos_{c["current_trial"]}')
+                user_let_match = col_let_check.checkbox(f"Letter match (N={c['n']} back)?", key=f'boss_check_let_{c["current_trial"]}')
                 
                 submitted = st.form_submit_button(
-                    "Submit & Next Trial", 
+                    button_label, 
+                    on_click=game_instance.boss_arena_next,
+                    args=[{'user_pos_match': user_pos_match, 'user_let_match': user_let_match}],
                     use_container_width=True
                 )
-                
-                if submitted:
-                    game_instance.boss_arena_next({
-                        'user_pos_match': user_pos_match, 
-                        'user_let_match': user_let_match
-                    })
-                    st.rerun()
         else:
-            # Initial screen to start the first trial
-            st.info("Start the quick 5-trial N-back test. Remember both position and letter N steps back.")
-            st.button("Start Challenge 1", on_click=lambda: game_instance.boss_arena_next(), use_container_width=True)
+            # For the first N trials, just advance the stimulus
+            st.info(f"Displaying stimulus. Match check will start after trial {c['n']}.")
+            st.button(f"Next Stimulus ({c['current_trial']}/{c['trials']})", 
+                      on_click=game_instance.boss_arena_next, 
+                      args=[{'user_pos_match': False, 'user_let_match': False}],
+                      key=f'boss_advance_stimulus_{c["current_trial"]}',
+                      use_container_width=True)
+
 
     elif c['challenge_stage'] == 1:
         # --- Perspective Shift ---
@@ -1225,6 +1278,7 @@ def handle_load_game(uploaded_file):
             st.session_state.player = player_data
             st.session_state.current_view = 'main_menu'
             st.session_state.game_output = ["Game loaded successfully! Welcome back."]
+            st.rerun()
         except Exception as e:
             st.error(f"Error loading game file: {e}")
 
