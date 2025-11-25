@@ -6,73 +6,13 @@ import os
 import time
 import pandas as pd
 
-# --- Corrected Firebase Imports ---
-# Assumes the environment directly provides these modules or their functions globally
-try:
-    from firebase_app import initializeApp
-    from firebase_auth import getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
-    from firebase_firestore import getFirestore, collection, doc, setDoc, getDoc, updateDoc
-except ImportError:
-    # Fallback for local testing or unexpected environments (may fail)
-    print("WARNING: Using dummy imports. Firebase will not function locally.")
-    class DummyAuth:
-        def __init__(self): self.uid = 'anonymous_local_test'
-    
-    # Define dummy functions to prevent immediate crash during local testing
-    def initializeApp(config): return None
-    def getAuth(app): return None
-    async def signInWithCustomToken(auth, token): return type('User', (object,), {'uid': 'token_error'})()
-    async def signInAnonymously(auth): return type('User', (object,), {'uid': 'anonymous_local_test'})()
-    def onAuthStateChanged(auth, handler): return lambda: None
-    def getFirestore(app): return None
-    def collection(db, path): return None
-    def doc(db, path): return None
-    async def setDoc(*args): pass
-    async def getDoc(*args): return type('DocSnapshot', (object,), {'exists': False, 'to_dict': lambda: {}}())
-    async def updateDoc(*args): pass
-
-# --- Firebase Setup and Constants (MANDATORY USE) ---
-# NOTE: The platform provides these global variables
-appId = 'default-app-id' # Fallback, but __app_id is used if available
-firebaseConfig = {}
-authToken = None
-
-# IMPROVEMENT: Access global variables more defensively
-try:
-    # Check if the global variables are defined before accessing them
-    if '__app_id' in globals() and globals()['__app_id']:
-        appId = globals()['__app_id']
-        
-    if '__firebase_config' in globals() and globals()['__firebase_config']:
-        # IMPORTANT: Ensure the string is not empty before parsing
-        config_str = globals()['__firebase_config']
-        if config_str:
-             firebaseConfig = json.loads(config_str)
-             
-    if '__initial_auth_token' in globals():
-        authToken = globals()['__initial_auth_token']
-        
-except NameError:
-    # Running locally or outside the canvas environment
-    print("WARNING: Firebase environment variables not found. Using defaults.")
-    pass
-
-# Initialize Firebase services
-if 'firebase_initialized' not in st.session_state:
-    if firebaseConfig and any(firebaseConfig.values()): # Check if config is non-empty and useful
-        try:
-            st.session_state.app = initializeApp(firebaseConfig)
-            st.session_state.db = getFirestore(st.session_state.app)
-            st.session_state.auth = getAuth(st.session_state.app)
-            st.session_state.firebase_initialized = True
-        except Exception as e:
-            st.error(f"Failed to initialize Firebase: {e}")
-            st.session_state.firebase_initialized = False
-    else:
-        # This is the message the user received, now we log why:
-        print("ERROR: firebaseConfig is empty or invalid. Cannot initialize Firebase.")
-        st.error("Firebase configuration is missing. Cannot save user progress.")
-        st.session_state.firebase_initialized = False
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="NeuroAI Quest",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # --- Custom CSS for App-like Feel ---
 st.markdown("""
@@ -176,107 +116,26 @@ class GameLogic:
         if word_count > 30: scores["creativity_bonus"] += min(10, (word_count - 30) // 3)
         return min(150, sum(scores.values())), scores
 
-# --- Firestore Functions ---
+# --- State Management Helper Functions ---
 
-DEFAULT_PLAYER_DATA = {
-    "name": "AI Apprentice",
-    "xp": 0, "level": 1, "streak": 0, "last_play": "",
-    "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
-    "total_sessions": 0
-}
-
-def get_player_doc_ref(db, userId):
-    # Path: /artifacts/{appId}/users/{userId}/game_data/progress
-    return doc(db, f"artifacts/{appId}/users/{userId}/game_data/progress")
-
-async def load_player_from_firestore():
-    # Only proceed if Firebase is initialized and auth is ready
-    if not st.session_state.get('auth_ready') or not st.session_state.get('firebase_initialized'):
-        # Fallback to default data
-        st.warning("Cannot load from Firestore. Using temporary session data.")
-        return DEFAULT_PLAYER_DATA 
-
-    db = st.session_state.db
-    userId = st.session_state.userId
-    
-    doc_ref = get_player_doc_ref(db, userId)
-    try:
-        doc_snapshot = await getDoc(doc_ref)
-        if doc_snapshot.exists:
-            player_data = doc_snapshot.to_dict()
-            st.toast("Progress loaded from Firestore!")
-            # Ensure all keys exist, setting defaults if necessary
-            return {**DEFAULT_PLAYER_DATA, **player_data}
+def load_player():
+    if 'player' not in st.session_state:
+        if os.path.exists('neuroai.json'):
+            with open('neuroai.json', 'r') as f:
+                p = json.load(f)
+                p['last_play'] = p.get('last_play', '')
+                st.session_state.player = p
         else:
-            # Create new player data in Firestore
-            await setDoc(doc_ref, DEFAULT_PLAYER_DATA)
-            st.toast("New profile created!")
-            return DEFAULT_PLAYER_DATA
-    except Exception as e:
-        st.error(f"Error loading player data: {e}. Using default profile.")
-        return DEFAULT_PLAYER_DATA
+            st.session_state.player = {
+                "name": "AI Apprentice",
+                "xp": 0, "level": 1, "streak": 0, "last_play": "",
+                "high_scores": [0]*4, "badges": [], "world_unlocks": [0]*4,
+                "total_sessions": 0
+            }
 
-async def save_player_to_firestore(player_data):
-    # Only proceed if Firebase is initialized and auth is ready
-    if not st.session_state.get('auth_ready') or not st.session_state.get('firebase_initialized'):
-        print("Save blocked: Auth not ready or Firebase not initialized.")
-        return
-
-    db = st.session_state.db
-    userId = st.session_state.userId
-    doc_ref = get_player_doc_ref(db, userId)
-    try:
-        # Use updateDoc to save the player data
-        await updateDoc(doc_ref, player_data)
-        print("Progress saved to Firestore.")
-    except Exception as e:
-        print(f"Error saving player data: {e}")
-        # Note: Do not use st.error here, as this function is called outside the main flow
-
-# --- Authentication and Initialization ---
-
-async def init_auth():
-    if st.session_state.get('auth_ready'):
-        return
-
-    # Check for Firebase initialization success before attempting auth
-    if not st.session_state.get('firebase_initialized') or 'auth' not in st.session_state:
-        st.session_state.auth_ready = False
-        return
-        
-    auth = st.session_state.auth
-    
-    # Sign in using custom token or anonymously
-    user = None
-    if authToken:
-        try:
-            user = await signInWithCustomToken(auth, authToken)
-        except Exception as e:
-            print(f"Custom Auth failed: {e}. Falling back to Anonymous.")
-            user = await signInAnonymously(auth)
-    else:
-        user = await signInAnonymously(auth)
-
-    # Use onAuthStateChanged to ensure user ID is captured correctly after sign-in
-    def handle_auth_state_change(user_obj):
-        if user_obj:
-            st.session_state.userId = user_obj.uid
-        else:
-            # Fallback to random UUID if auth is truly anonymous or fails
-            # We use a deterministic method here for consistency in testing, but in a real app, use UUID
-            st.session_state.userId = 'anonymous_' + str(random.getrandbits(128))
-            
-        st.session_state.auth_ready = True
-        # Rerun to load player data now that we have the userId
-        st.rerun()
-
-    # onAuthStateChanged returns an unsubscriber function, but we don't strictly need it 
-    # for a Streamlit single-page app structure here.
-    if 'auth_listener_set' not in st.session_state:
-        onAuthStateChanged(auth, handle_auth_state_change)
-        st.session_state.auth_listener_set = True
-
-# --- Game Logic Functions (Adapted for Firestore) ---
+def save_player():
+    with open('neuroai.json', 'w') as f:
+        json.dump(st.session_state.player, f, indent=2)
 
 def update_streak():
     player = st.session_state.player
@@ -294,19 +153,19 @@ def update_streak():
         player["streak"] = 1
     player["last_play"] = today
     player["total_sessions"] = player.get("total_sessions", 0) + 1
-    # Defer saving the updated player state
-    st.session_state.save_pending = True
-    
+    save_player()
+
 def gain_xp(pts, world_idx=None):
     player = st.session_state.player
-    bonus = player.get("streak", 0) * 10
+    bonus = player["streak"] * 10
     total = pts + bonus
     player["xp"] += total
     
-    if world_idx is not None and len(player["high_scores"]) > world_idx:
+    if world_idx is not None:
         player["high_scores"][world_idx] = max(player["high_scores"][world_idx], pts)
     
     # Simple Logic: Every 100 XP is a level. 
+    # Current Level 1: 0-99. Level 2: 100-199.
     old_level = player["level"]
     while player["xp"] >= player["level"] * 100:
         player["level"] += 1
@@ -315,86 +174,36 @@ def gain_xp(pts, world_idx=None):
         st.balloons()
         st.success(f"🌟 LEVEL UP! You are now Level {player['level']}!")
         if player["level"] % 5 == 0:
-            award_badge(f"Level {player['level']} Master", internal_save=False)
+            award_badge(f"Level {player['level']} Master")
             
-    # Asynchronously save updated player state
-    st.session_state.save_pending = True
+    save_player()
     return total
 
-def award_badge(badge, internal_save=True):
+def award_badge(badge):
     if badge not in st.session_state.player["badges"]:
         st.session_state.player["badges"].append(badge)
         st.session_state.player["xp"] += 50
         st.toast(f"🎖️ BADGE UNLOCKED: {badge}", icon="🎖️")
-        if internal_save:
-             st.session_state.save_pending = True
+        save_player()
 
-# --- Global Initialization and Routing Setup ---
-
-# Run Auth Initialization first
-if 'auth_ready' not in st.session_state:
-    st.session_state.auth_ready = False
-    st.session_state.userId = None
-    st.session_state.player = DEFAULT_PLAYER_DATA
-    st.session_state.save_pending = False
+# --- Initialization ---
+if 'game_logic' not in st.session_state:
     st.session_state.game_logic = GameLogic()
-    st.session_state.current_view = 'loading'
-    
-    # Initialize game_state safely here, so it always exists
-    st.session_state.game_state = {} 
-    
-    # This must be run asynchronously, handled by Streamlit's event loop
-    st.code(init_auth, language="python") # Streamlit will execute the async function
 
-# After auth is ready, load player data
-if st.session_state.auth_ready and 'player_loaded' not in st.session_state:
-    st.session_state.player = st.code(load_player_from_firestore, language="python") # Load data
-    st.session_state.player_loaded = True
+load_player()
+# Ensure persistence across re-runs for game states
+if 'current_view' not in st.session_state:
     st.session_state.current_view = 'menu'
-    st.rerun()
+if 'game_state' not in st.session_state:
+    st.session_state.game_state = {} 
 
-# --- Main App Execution flow ---
-if st.session_state.current_view == 'loading':
-    st.info("Initializing NeuroAI Quest. Securing unique user session...")
-    
-    # If config failed, show the error state but allow user to interact with default profile
-    if not st.session_state.get('firebase_initialized'):
-        st.error("Using local, non-persistent profile due to missing Firebase configuration.")
-        st.session_state.auth_ready = True
-        st.session_state.userId = 'local_non_persistent_user'
-        st.session_state.player_loaded = True
-        st.session_state.current_view = 'menu'
-        st.rerun()
-        
-    st.stop()
-
-# Player Data is ready from here on
+update_streak()
 logic = st.session_state.game_logic
 player = st.session_state.player
 
-# Run update streak (which relies on player data being loaded)
-update_streak()
-
-# --- Post-Processing and Saving ---
-# CRITICAL FIX: The st.code call for saving must be outside the main view functions
-# and handle the async coroutine return gracefully.
-# We create a wrapper function that ensures the asynchronous call is awaited/executed.
-if st.session_state.save_pending:
-    def _run_save(player_data):
-        # This function is executed by st.code()
-        # It's better to just call the async function directly here 
-        # and let Streamlit handle the coroutine, which it does when called via st.code
-        return save_player_to_firestore(player_data)
-
-    # Call the wrapper function via st.code to trigger the async execution
-    st.code(_run_save, language="python", args=(player,)) 
-    st.session_state.save_pending = False
-    # No st.rerun() here to avoid infinite loops, let the next user interaction trigger it
-
-# --- Sidebar (adapted for new state) ---
+# --- Sidebar ---
 with st.sidebar:
     st.title(f"👤 {player['name']}")
-    st.caption(f"User ID: {st.session_state.userId}") # Show user ID for debugging
     
     col1, col2 = st.columns(2)
     with col1:
@@ -402,9 +211,12 @@ with st.sidebar:
     with col2:
         st.metric("Streak", f"{player['streak']}🔥")
     
-    # Progress Bar Calculation
+    # FIX: Correct logic for progress bar to be 0.0 - 1.0
+    # Level 1 starts at 0 XP. Level 2 starts at 100 XP. Level 3 at 200 XP.
+    # Formula: (Current XP - Previous Level Threshold) / 100
     current_level_start_xp = (player['level'] - 1) * 100
     xp_in_level = player['xp'] - current_level_start_xp
+    # Ensure it's between 0.0 and 1.0, avoiding > 1.0 crashes
     progress_val = max(0.0, min(1.0, xp_in_level / 100.0))
     
     st.progress(progress_val, text=f"XP: {player['xp']}")
@@ -427,12 +239,10 @@ with st.sidebar:
     st.divider()
     if st.button("⬅️ Back to Main Menu"):
         st.session_state.current_view = 'menu'
-        # Safely reset the specific game state 
-        st.session_state.game_state = {} 
+        st.session_state.game_state = {} # Reset specific game state
         st.rerun()
 
-# --- Game Views (Same logic, but rely on updated player state) ---
-# ... (view_menu, view_memory, view_perspective, view_logic, view_prompt, view_meta, view_boss remain mostly identical)
+# --- Game Views ---
 
 def view_menu():
     st.markdown("<h1 class='main-header'>🧠 NeuroAI Quest</h1>", unsafe_allow_html=True)
@@ -502,9 +312,8 @@ def view_menu():
 def view_memory():
     st.header("🧠 Memory Boost: Dual N-Back")
     
-    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
-    gs = st.session_state.game_state.get('memory', {})
-    
+    # Initialize Game State
+    gs = st.session_state.game_state
     if 'active' not in gs:
         world_level = player["world_unlocks"][0]
         n = max(2, world_level // 3 + 2)
@@ -521,9 +330,6 @@ def view_memory():
             'current_let': '',
             'feedback_msg': ''
         })
-        # Save the initial state back to the session state
-        st.session_state.game_state['memory'] = gs
-
 
     n = gs['n']
     
@@ -531,7 +337,6 @@ def view_memory():
         st.info(f"**Level N={n}**. Remember if position OR letter matches {n} steps back!")
         if st.button("Start Trial Loop"):
             gs['phase'] = 'show'
-            st.session_state.game_state['memory'] = gs # Update session state
             st.rerun()
 
     elif gs['phase'] == 'show':
@@ -548,15 +353,10 @@ def view_memory():
             st.markdown(f"<h2 style='text-align: center; color: yellow;'>{let}</h2>", unsafe_allow_html=True)
             st.caption("Memorize this...")
         
-        # Non-blocking way to wait for time
-        # This will not actually work as intended in Streamlit's redraw cycle
-        # We rely on the user manually advancing or a full app state change
-        # For simplicity, we just rerender to move to the next state, assuming rapid clicking
-        # time.sleep(1.5) # Blocking sleep is okay for short flash
-        # placeholder.empty() # This will only run on next rerender
-
+        time.sleep(1.5) # Blocking sleep is okay for short flash
+        placeholder.empty()
+        
         gs['phase'] = 'input'
-        st.session_state.game_state['memory'] = gs # Update session state
         st.rerun()
 
     elif gs['phase'] == 'input':
@@ -604,21 +404,13 @@ def view_memory():
                     gs['phase'] = 'end'
                 else:
                     gs['phase'] = 'feedback'
-                
-                st.session_state.game_state['memory'] = gs # Update session state
                 st.rerun()
 
     elif gs['phase'] == 'feedback':
         st.info(gs['feedback_msg'])
-        # Since st.rerun is called right after, this sleep is largely ineffective 
-        # in the web environment. We rely on user action.
-        # time.sleep(1.5) # Show feedback briefly 
-
-        # We need a button to advance from feedback state to the next trial
-        if st.button("Continue"):
-            gs['phase'] = 'show'
-            st.session_state.game_state['memory'] = gs # Update session state
-            st.rerun()
+        time.sleep(1.5) # Show feedback briefly
+        gs['phase'] = 'show'
+        st.rerun()
 
     elif gs['phase'] == 'end':
         final_score = (gs['score'] / (gs['trials_total'] * 5)) * 100
@@ -636,15 +428,13 @@ def view_memory():
             if final_score > 90: award_badge(f"Memory N{n} Grandmaster")
             
             st.session_state.current_view = 'menu'
-            st.session_state.game_state = {} # Reset entire game_state on return
+            st.session_state.game_state = {}
             st.rerun()
 
 def view_perspective():
     st.header("🔄 View Switch: Multi-Perspective")
     
-    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
-    gs = st.session_state.game_state.get('perspective', {})
-    
+    gs = st.session_state.game_state
     if 'active' not in gs:
         world_level = player["world_unlocks"][1]
         gs.update({
@@ -655,7 +445,6 @@ def view_perspective():
             'answers': [],
             'phase': 'input'
         })
-        st.session_state.game_state['perspective'] = gs # Save the initial state back
     
     if gs['phase'] == 'input':
         st.subheader(f"Scenario: {gs['scenario']}")
@@ -676,11 +465,9 @@ def view_perspective():
                 
                 if gs['current_view_idx'] < len(gs['views']) - 1:
                     gs['current_view_idx'] += 1
-                    st.session_state.game_state['perspective'] = gs # Update session state
                     st.rerun()
                 else:
                     gs['phase'] = 'end'
-                    st.session_state.game_state['perspective'] = gs # Update session state
                     st.rerun()
                     
     elif gs['phase'] == 'end':
@@ -702,9 +489,7 @@ def view_perspective():
 def view_logic():
     st.header("⚙️ Step Logic: Riddle Breaker")
     
-    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
-    gs = st.session_state.game_state.get('logic', {})
-    
+    gs = st.session_state.game_state
     # Check if the session is in the 'finished' state
     if gs.get('phase') == 'finished':
         if st.button("Finish Training & Return to Menu"):
@@ -721,7 +506,6 @@ def view_logic():
             'keys': keys,
             'steps_count': min(3 + player["world_unlocks"][2] // 2, 6)
         })
-        st.session_state.game_state['logic'] = gs # Save the initial state back
         
     st.info(f"❓ **RIDDLE:** {gs['riddle']}")
     st.write(f"Break this down into **{gs['steps_count']} logical steps**.")
@@ -760,22 +544,18 @@ def view_logic():
                 st.success("Logic Level Up!")
                 award_badge("Logic Legend")
                 
-            # Transition to a finished phase
+            # FIX: Transition to a finished phase instead of using a button inside the form block
             gs['phase'] = 'finished'
-            st.session_state.game_state['logic'] = gs # Update session state
             st.rerun()
 
 
 def view_prompt():
     st.header("🤖 AI Prompting: Forge")
     
-    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
-    gs = st.session_state.game_state.get('prompt', {})
-    
+    gs = st.session_state.game_state
     if 'active' not in gs:
         gs['active'] = True
         gs['target'] = random.choice(logic.puzzles["prompt_targets"])
-        st.session_state.game_state['prompt'] = gs # Save the initial state back
         
     st.subheader(f"🎯 Target: {gs['target']}")
     st.info("Craft a prompt using roles, steps, constraints, and formats.")
@@ -814,9 +594,7 @@ def view_prompt():
 def view_meta():
     st.header("🤔 Meta-Cognition Drill")
     
-    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
-    gs = st.session_state.game_state.get('meta', {})
-    
+    gs = st.session_state.game_state
     if 'active' not in gs:
         gs.update({
             'active': True,
@@ -827,7 +605,6 @@ def view_meta():
             ]),
             'modes': random.sample(list(logic.thinking_modes.items()), 3)
         })
-        st.session_state.game_state['meta'] = gs # Save the initial state back
         
     st.markdown(f"### 💡 Problem: {gs['problem']}")
     
@@ -887,14 +664,12 @@ def view_boss():
             
         if st.button("Leave Arena"):
             st.session_state.current_view = 'menu'
-            st.session_state.game_state = {}
             st.rerun()
 
 # --- Main Routing ---
 
 if st.session_state.current_view == 'menu':
     view_menu()
-# Ensure that all game views check for their specific key within game_state
 elif st.session_state.current_view == 'memory':
     view_memory()
 elif st.session_state.current_view == 'perspective':
