@@ -8,9 +8,7 @@ import pandas as pd
 
 # --- Corrected Firebase Imports ---
 # Assumes the environment directly provides these modules or their functions globally
-# We rely on the functions being available in the global scope or imported directly
 try:
-    # Attempt to use the globally provided objects/functions
     from firebase_app import initializeApp
     from firebase_auth import getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
     from firebase_firestore import getFirestore, collection, doc, setDoc, getDoc, updateDoc
@@ -23,8 +21,8 @@ except ImportError:
     # Define dummy functions to prevent immediate crash during local testing
     def initializeApp(config): return None
     def getAuth(app): return None
-    def signInWithCustomToken(auth, token): return DummyAuth()
-    def signInAnonymously(auth): return DummyAuth()
+    async def signInWithCustomToken(auth, token): return type('User', (object,), {'uid': 'token_error'})()
+    async def signInAnonymously(auth): return type('User', (object,), {'uid': 'anonymous_local_test'})()
     def onAuthStateChanged(auth, handler): return lambda: None
     def getFirestore(app): return None
     def collection(db, path): return None
@@ -33,31 +31,36 @@ except ImportError:
     async def getDoc(*args): return type('DocSnapshot', (object,), {'exists': False, 'to_dict': lambda: {}}())
     async def updateDoc(*args): pass
 
-
 # --- Firebase Setup and Constants (MANDATORY USE) ---
 # NOTE: The platform provides these global variables
 appId = 'default-app-id' # Fallback, but __app_id is used if available
 firebaseConfig = {}
 authToken = None
 
+# IMPROVEMENT: Access global variables more defensively
 try:
-    if '__app_id' in globals():
-        appId = __app_id
-    if '__firebase_config' in globals():
-        firebaseConfig = json.loads(__firebase_config)
+    # Check if the global variables are defined before accessing them
+    if '__app_id' in globals() and globals()['__app_id']:
+        appId = globals()['__app_id']
+        
+    if '__firebase_config' in globals() and globals()['__firebase_config']:
+        # IMPORTANT: Ensure the string is not empty before parsing
+        config_str = globals()['__firebase_config']
+        if config_str:
+             firebaseConfig = json.loads(config_str)
+             
     if '__initial_auth_token' in globals():
-        authToken = __initial_auth_token
+        authToken = globals()['__initial_auth_token']
+        
 except NameError:
     # Running locally or outside the canvas environment
     print("WARNING: Firebase environment variables not found. Using defaults.")
     pass
 
 # Initialize Firebase services
-# We wrap the initialization in a check to ensure it only happens once per session
 if 'firebase_initialized' not in st.session_state:
-    if firebaseConfig:
+    if firebaseConfig and any(firebaseConfig.values()): # Check if config is non-empty and useful
         try:
-            # Use the corrected initializeApp
             st.session_state.app = initializeApp(firebaseConfig)
             st.session_state.db = getFirestore(st.session_state.app)
             st.session_state.auth = getAuth(st.session_state.app)
@@ -66,6 +69,8 @@ if 'firebase_initialized' not in st.session_state:
             st.error(f"Failed to initialize Firebase: {e}")
             st.session_state.firebase_initialized = False
     else:
+        # This is the message the user received, now we log why:
+        print("ERROR: firebaseConfig is empty or invalid. Cannot initialize Firebase.")
         st.error("Firebase configuration is missing. Cannot save user progress.")
         st.session_state.firebase_initialized = False
 
@@ -109,7 +114,6 @@ st.markdown("""
 # --- Game Data & Logic Classes ---
 
 class GameLogic:
-    # Existing GameLogic class remains unchanged for puzzle data
     def __init__(self):
         self.puzzles = self.load_puzzles()
         self.thinking_modes = {
@@ -186,9 +190,11 @@ def get_player_doc_ref(db, userId):
     return doc(db, f"artifacts/{appId}/users/{userId}/game_data/progress")
 
 async def load_player_from_firestore():
-    if not st.session_state.get('auth_ready'):
-        st.info("Waiting for authentication...")
-        return DEFAULT_PLAYER_DATA
+    # Only proceed if Firebase is initialized and auth is ready
+    if not st.session_state.get('auth_ready') or not st.session_state.get('firebase_initialized'):
+        # Fallback to default data
+        st.warning("Cannot load from Firestore. Using temporary session data.")
+        return DEFAULT_PLAYER_DATA 
 
     db = st.session_state.db
     userId = st.session_state.userId
@@ -211,7 +217,8 @@ async def load_player_from_firestore():
         return DEFAULT_PLAYER_DATA
 
 async def save_player_to_firestore(player_data):
-    if not st.session_state.get('auth_ready'):
+    # Only proceed if Firebase is initialized and auth is ready
+    if not st.session_state.get('auth_ready') or not st.session_state.get('firebase_initialized'):
         return
 
     db = st.session_state.db
@@ -220,6 +227,7 @@ async def save_player_to_firestore(player_data):
     try:
         # Use updateDoc to save the player data
         await updateDoc(doc_ref, player_data)
+        st.toast("Progress saved!")
     except Exception as e:
         st.error(f"Error saving player data: {e}")
 
@@ -229,29 +237,29 @@ async def init_auth():
     if st.session_state.get('auth_ready'):
         return
 
-    if 'app' not in st.session_state or 'auth' not in st.session_state:
+    # Check for Firebase initialization success before attempting auth
+    if not st.session_state.get('firebase_initialized') or 'auth' not in st.session_state:
         st.session_state.auth_ready = False
         return
         
     auth = st.session_state.auth
     
     # Sign in using custom token or anonymously
+    user = None
     if authToken:
         try:
-            await signInWithCustomToken(auth, authToken)
+            user = await signInWithCustomToken(auth, authToken)
         except Exception as e:
-            st.error(f"Custom Auth failed: {e}. Falling back to Anonymous.")
-            await signInAnonymously(auth)
+            print(f"Custom Auth failed: {e}. Falling back to Anonymous.")
+            user = await signInAnonymously(auth)
     else:
-        await signInAnonymously(auth)
+        user = await signInAnonymously(auth)
 
     # Use onAuthStateChanged to ensure user ID is captured correctly after sign-in
-    def handle_auth_state_change(user):
-        if user:
-            st.session_state.userId = user.uid
+    def handle_auth_state_change(user_obj):
+        if user_obj:
+            st.session_state.userId = user_obj.uid
         else:
-            # Should not happen after successful sign-in, but safety first
-            # Fallback to a random ID if no user is signed in (shouldn't happen with anonymous sign-in)
             st.session_state.userId = 'anonymous_' + str(random.getrandbits(128))
             
         st.session_state.auth_ready = True
@@ -340,6 +348,16 @@ if st.session_state.auth_ready and 'player_loaded' not in st.session_state:
 # --- Main App Execution flow ---
 if st.session_state.current_view == 'loading':
     st.info("Initializing NeuroAI Quest. Securing unique user session...")
+    
+    # If config failed, show the error state but allow user to interact with default profile
+    if not st.session_state.get('firebase_initialized'):
+        st.error("Using local, non-persistent profile due to missing Firebase configuration.")
+        st.session_state.auth_ready = True
+        st.session_state.userId = 'local_non_persistent_user'
+        st.session_state.player_loaded = True
+        st.session_state.current_view = 'menu'
+        st.rerun()
+        
     st.stop()
 
 # Player Data is ready from here on
