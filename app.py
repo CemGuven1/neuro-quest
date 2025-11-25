@@ -441,70 +441,55 @@ def view_menu():
         st.rerun()
 
 def render_grid(position, letter):
-    """Render a 3x3 grid showing the position and letter.
+    """Render a 3x3 grid showing the position and letter using Streamlit columns.
     If position is 0, shows a reference grid with no active position."""
-    grid_html = """
-    <style>
-    .grid-container {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 10px;
-        max-width: 400px;
-        margin: 20px auto;
-    }
-    .grid-tile {
-        aspect-ratio: 1;
-        border: 3px solid #4A90E2;
-        border-radius: 10px;
-        background-color: #262730;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        transition: all 0.3s;
-        position: relative;
-    }
-    .grid-tile.active {
-        background-color: #50E3C2;
-        border-color: #FFD700;
-        box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-        transform: scale(1.1);
-    }
-    .tile-number {
-        font-size: 0.9rem;
-        color: #888;
-        margin-bottom: 5px;
-    }
-    .tile-letter {
-        font-size: 2.5rem;
-        color: #FFD700;
-        font-weight: 900;
-        min-height: 3rem;
-    }
-    .grid-tile.active .tile-letter {
-        color: #1a1a1a;
-        font-size: 3rem;
-    }
-    </style>
-    <div class="grid-container">
-    """
-    
-    for i in range(9):
-        pos_num = i + 1
-        is_active = (position > 0 and pos_num == position)
-        active_class = "active" if is_active else ""
-        display_letter = letter if is_active else ""
-        
-        grid_html += f"""
-        <div class="grid-tile {active_class}">
-            <div class="tile-number">{pos_num}</div>
-            <div class="tile-letter">{display_letter}</div>
-        </div>
-        """
-    
-    grid_html += "</div>"
-    return grid_html
+    # Create 3 rows
+    for row in range(3):
+        cols = st.columns(3)
+        for col in range(3):
+            pos_num = row * 3 + col + 1
+            is_active = (position > 0 and pos_num == position)
+            display_letter = letter if is_active else ""
+            
+            with cols[col]:
+                # Determine styling based on active state
+                if is_active:
+                    # Active tile styling
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background-color: #50E3C2;
+                            border: 3px solid #FFD700;
+                            border-radius: 10px;
+                            padding: 20px;
+                            text-align: center;
+                            min-height: 120px;
+                            box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+                        ">
+                            <div style="font-size: 0.9rem; color: #1a1a1a; margin-bottom: 5px;">{pos_num}</div>
+                            <div style="font-size: 3rem; color: #1a1a1a; font-weight: 900;">{display_letter}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                else:
+                    # Inactive tile styling
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background-color: #262730;
+                            border: 3px solid #4A90E2;
+                            border-radius: 10px;
+                            padding: 20px;
+                            text-align: center;
+                            min-height: 120px;
+                        ">
+                            <div style="font-size: 0.9rem; color: #888; margin-bottom: 5px;">{pos_num}</div>
+                            <div style="font-size: 2.5rem; color: #FFD700; font-weight: 900; min-height: 3rem;">{display_letter}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
 def view_memory():
     st.header("🧠 Memory Boost: Dual N-Back")
@@ -546,8 +531,7 @@ def view_memory():
         # Display grid with position and letter
         placeholder = st.empty()
         with placeholder.container():
-            grid_html = render_grid(pos, let)
-            st.markdown(grid_html, unsafe_allow_html=True)
+            render_grid(pos, let)
             st.markdown("<p style='text-align: center; font-size: 1.2rem; margin-top: 20px;'><strong>Memorize this position and letter...</strong></p>", unsafe_allow_html=True)
         
         time.sleep(1.5) # Blocking sleep is okay for short flash
@@ -560,8 +544,7 @@ def view_memory():
         st.write(f"Trial {gs['current_trial'] + 1} / {gs['trials_total']}")
         
         # Show reference grid (empty) to help with position recall
-        reference_grid = render_grid(0, "")  # 0 means no active position
-        st.markdown(reference_grid, unsafe_allow_html=True)
+        render_grid(0, "")  # 0 means no active position
         st.caption("Reference grid - remember which position and letter you just saw!")
         
         with st.form("memory_input"):
