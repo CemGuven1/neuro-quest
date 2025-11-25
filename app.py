@@ -5,10 +5,34 @@ import random
 import os
 import time
 import pandas as pd
-# Import Firebase Libraries
-from firebase import firebase_app, firestore_db, firebase_auth, firebase_storage # Assumes these are available through runtime injection
-from firebase.firestore import collection, doc, setDoc, getDoc, updateDoc, getFirestore
-from firebase.auth import signInWithCustomToken, signInAnonymously, getAuth, onAuthStateChanged
+
+# --- Corrected Firebase Imports ---
+# Assumes the environment directly provides these modules or their functions globally
+# We rely on the functions being available in the global scope or imported directly
+try:
+    # Attempt to use the globally provided objects/functions
+    from firebase_app import initializeApp
+    from firebase_auth import getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
+    from firebase_firestore import getFirestore, collection, doc, setDoc, getDoc, updateDoc
+except ImportError:
+    # Fallback for local testing or unexpected environments (may fail)
+    print("WARNING: Using dummy imports. Firebase will not function locally.")
+    class DummyAuth:
+        def __init__(self): self.uid = 'anonymous_local_test'
+    
+    # Define dummy functions to prevent immediate crash during local testing
+    def initializeApp(config): return None
+    def getAuth(app): return None
+    def signInWithCustomToken(auth, token): return DummyAuth()
+    def signInAnonymously(auth): return DummyAuth()
+    def onAuthStateChanged(auth, handler): return lambda: None
+    def getFirestore(app): return None
+    def collection(db, path): return None
+    def doc(db, path): return None
+    async def setDoc(*args): pass
+    async def getDoc(*args): return type('DocSnapshot', (object,), {'exists': False, 'to_dict': lambda: {}}())
+    async def updateDoc(*args): pass
+
 
 # --- Firebase Setup and Constants (MANDATORY USE) ---
 # NOTE: The platform provides these global variables
@@ -33,7 +57,8 @@ except NameError:
 if 'firebase_initialized' not in st.session_state:
     if firebaseConfig:
         try:
-            st.session_state.app = firebase_app.initializeApp(firebaseConfig)
+            # Use the corrected initializeApp
+            st.session_state.app = initializeApp(firebaseConfig)
             st.session_state.db = getFirestore(st.session_state.app)
             st.session_state.auth = getAuth(st.session_state.app)
             st.session_state.firebase_initialized = True
@@ -226,6 +251,7 @@ async def init_auth():
             st.session_state.userId = user.uid
         else:
             # Should not happen after successful sign-in, but safety first
+            # Fallback to a random ID if no user is signed in (shouldn't happen with anonymous sign-in)
             st.session_state.userId = 'anonymous_' + str(random.getrandbits(128))
             
         st.session_state.auth_ready = True
