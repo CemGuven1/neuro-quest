@@ -260,6 +260,7 @@ async def init_auth():
         if user_obj:
             st.session_state.userId = user_obj.uid
         else:
+            # Fallback to random UUID if auth is truly anonymous or fails
             st.session_state.userId = 'anonymous_' + str(random.getrandbits(128))
             
         st.session_state.auth_ready = True
@@ -334,6 +335,9 @@ if 'auth_ready' not in st.session_state:
     st.session_state.save_pending = False
     st.session_state.game_logic = GameLogic()
     st.session_state.current_view = 'loading'
+    
+    # Initialize game_state safely here, so it always exists
+    st.session_state.game_state = {} 
     
     # This must be run asynchronously, handled by Streamlit's event loop
     st.code(init_auth, language="python") # Streamlit will execute the async function
@@ -410,7 +414,8 @@ with st.sidebar:
     st.divider()
     if st.button("⬅️ Back to Main Menu"):
         st.session_state.current_view = 'menu'
-        st.session_state.game_state = {} # Reset specific game state
+        # Safely reset the specific game state 
+        st.session_state.game_state = {} 
         st.rerun()
 
 # --- Game Views (Same logic, but rely on updated player state) ---
@@ -484,8 +489,9 @@ def view_menu():
 def view_memory():
     st.header("🧠 Memory Boost: Dual N-Back")
     
-    # Initialize Game State
-    gs = st.session_state.game_state
+    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
+    gs = st.session_state.game_state.get('memory', {})
+    
     if 'active' not in gs:
         world_level = player["world_unlocks"][0]
         n = max(2, world_level // 3 + 2)
@@ -502,6 +508,9 @@ def view_memory():
             'current_let': '',
             'feedback_msg': ''
         })
+        # Save the initial state back to the session state
+        st.session_state.game_state['memory'] = gs
+
 
     n = gs['n']
     
@@ -509,6 +518,7 @@ def view_memory():
         st.info(f"**Level N={n}**. Remember if position OR letter matches {n} steps back!")
         if st.button("Start Trial Loop"):
             gs['phase'] = 'show'
+            st.session_state.game_state['memory'] = gs # Update session state
             st.rerun()
 
     elif gs['phase'] == 'show':
@@ -529,6 +539,7 @@ def view_memory():
         placeholder.empty()
         
         gs['phase'] = 'input'
+        st.session_state.game_state['memory'] = gs # Update session state
         st.rerun()
 
     elif gs['phase'] == 'input':
@@ -576,12 +587,15 @@ def view_memory():
                     gs['phase'] = 'end'
                 else:
                     gs['phase'] = 'feedback'
+                
+                st.session_state.game_state['memory'] = gs # Update session state
                 st.rerun()
 
     elif gs['phase'] == 'feedback':
         st.info(gs['feedback_msg'])
         time.sleep(1.5) # Show feedback briefly
         gs['phase'] = 'show'
+        st.session_state.game_state['memory'] = gs # Update session state
         st.rerun()
 
     elif gs['phase'] == 'end':
@@ -600,13 +614,15 @@ def view_memory():
             if final_score > 90: award_badge(f"Memory N{n} Grandmaster")
             
             st.session_state.current_view = 'menu'
-            st.session_state.game_state = {}
+            st.session_state.game_state = {} # Reset entire game_state on return
             st.rerun()
 
 def view_perspective():
     st.header("🔄 View Switch: Multi-Perspective")
     
-    gs = st.session_state.game_state
+    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
+    gs = st.session_state.game_state.get('perspective', {})
+    
     if 'active' not in gs:
         world_level = player["world_unlocks"][1]
         gs.update({
@@ -617,6 +633,7 @@ def view_perspective():
             'answers': [],
             'phase': 'input'
         })
+        st.session_state.game_state['perspective'] = gs # Save the initial state back
     
     if gs['phase'] == 'input':
         st.subheader(f"Scenario: {gs['scenario']}")
@@ -637,9 +654,11 @@ def view_perspective():
                 
                 if gs['current_view_idx'] < len(gs['views']) - 1:
                     gs['current_view_idx'] += 1
+                    st.session_state.game_state['perspective'] = gs # Update session state
                     st.rerun()
                 else:
                     gs['phase'] = 'end'
+                    st.session_state.game_state['perspective'] = gs # Update session state
                     st.rerun()
                     
     elif gs['phase'] == 'end':
@@ -661,7 +680,9 @@ def view_perspective():
 def view_logic():
     st.header("⚙️ Step Logic: Riddle Breaker")
     
-    gs = st.session_state.game_state
+    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
+    gs = st.session_state.game_state.get('logic', {})
+    
     # Check if the session is in the 'finished' state
     if gs.get('phase') == 'finished':
         if st.button("Finish Training & Return to Menu"):
@@ -678,6 +699,7 @@ def view_logic():
             'keys': keys,
             'steps_count': min(3 + player["world_unlocks"][2] // 2, 6)
         })
+        st.session_state.game_state['logic'] = gs # Save the initial state back
         
     st.info(f"❓ **RIDDLE:** {gs['riddle']}")
     st.write(f"Break this down into **{gs['steps_count']} logical steps**.")
@@ -718,16 +740,20 @@ def view_logic():
                 
             # Transition to a finished phase
             gs['phase'] = 'finished'
+            st.session_state.game_state['logic'] = gs # Update session state
             st.rerun()
 
 
 def view_prompt():
     st.header("🤖 AI Prompting: Forge")
     
-    gs = st.session_state.game_state
+    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
+    gs = st.session_state.game_state.get('prompt', {})
+    
     if 'active' not in gs:
         gs['active'] = True
         gs['target'] = random.choice(logic.puzzles["prompt_targets"])
+        st.session_state.game_state['prompt'] = gs # Save the initial state back
         
     st.subheader(f"🎯 Target: {gs['target']}")
     st.info("Craft a prompt using roles, steps, constraints, and formats.")
@@ -766,7 +792,9 @@ def view_prompt():
 def view_meta():
     st.header("🤔 Meta-Cognition Drill")
     
-    gs = st.session_state.game_state
+    # FIX: Use .get() to safely retrieve game_state, defaulting to {} if missing.
+    gs = st.session_state.game_state.get('meta', {})
+    
     if 'active' not in gs:
         gs.update({
             'active': True,
@@ -777,6 +805,7 @@ def view_meta():
             ]),
             'modes': random.sample(list(logic.thinking_modes.items()), 3)
         })
+        st.session_state.game_state['meta'] = gs # Save the initial state back
         
     st.markdown(f"### 💡 Problem: {gs['problem']}")
     
@@ -836,12 +865,14 @@ def view_boss():
             
         if st.button("Leave Arena"):
             st.session_state.current_view = 'menu'
+            st.session_state.game_state = {}
             st.rerun()
 
 # --- Main Routing ---
 
 if st.session_state.current_view == 'menu':
     view_menu()
+# Ensure that all game views check for their specific key within game_state
 elif st.session_state.current_view == 'memory':
     view_memory()
 elif st.session_state.current_view == 'perspective':
