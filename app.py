@@ -164,6 +164,8 @@ def gain_xp(pts, world_idx=None):
     if world_idx is not None:
         player["high_scores"][world_idx] = max(player["high_scores"][world_idx], pts)
     
+    # Simple Logic: Every 100 XP is a level. 
+    # Current Level 1: 0-99. Level 2: 100-199.
     old_level = player["level"]
     while player["xp"] >= player["level"] * 100:
         player["level"] += 1
@@ -208,8 +210,16 @@ with st.sidebar:
         st.metric("Level", player['level'])
     with col2:
         st.metric("Streak", f"{player['streak']}🔥")
-        
-    st.progress(min(100, (player['xp'] % (player['level'] * 100)) / (player['level'] * 100) * 100), text=f"XP: {player['xp']}")
+    
+    # FIX: Correct logic for progress bar to be 0.0 - 1.0
+    # Level 1 starts at 0 XP. Level 2 starts at 100 XP. Level 3 at 200 XP.
+    # Formula: (Current XP - Previous Level Threshold) / 100
+    current_level_start_xp = (player['level'] - 1) * 100
+    xp_in_level = player['xp'] - current_level_start_xp
+    # Ensure it's between 0.0 and 1.0, avoiding > 1.0 crashes
+    progress_val = max(0.0, min(1.0, xp_in_level / 100.0))
+    
+    st.progress(progress_val, text=f"XP: {player['xp']}")
     
     st.divider()
     st.markdown("### 🏆 Mastery")
