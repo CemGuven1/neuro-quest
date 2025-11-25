@@ -499,109 +499,30 @@ def view_memory():
     if 'active' not in gs:
         world_level = player["world_unlocks"][0]
         n = max(2, world_level // 3 + 2)
+        # Generate first position and letter
+        pos = random.randint(1, 9)
+        let = random.choice(logic.puzzles["letters"])
         gs.update({
             'active': True,
             'n': n,
-            'trials_total': 10, # Shortened for web UX
+            'trials_total': 10,
             'current_trial': 0,
             'score': 0,
             'pos_hist': [],
             'let_hist': [],
-            'phase': 'ready', # ready, show, input, feedback, end
-            'current_pos': 0,
-            'current_let': '',
-            'feedback_msg': ''
+            'current_pos': pos,
+            'current_let': let,
+            'last_feedback': ''
         })
 
     n = gs['n']
     
-    if gs['phase'] == 'ready':
-        st.info(f"**Level N={n}**. Remember if position OR letter matches {n} steps back!")
-        if st.button("Start Trial Loop"):
-            gs['phase'] = 'show'
-            st.rerun()
-
-    elif gs['phase'] == 'show':
-        # Logic to generate new items
-        pos = random.randint(1, 9)
-        let = random.choice(logic.puzzles["letters"])
-        gs['current_pos'] = pos
-        gs['current_let'] = let
-        
-        # Display grid with position and letter
-        placeholder = st.empty()
-        with placeholder.container():
-            render_grid(pos, let)
-            st.markdown("<p style='text-align: center; font-size: 1.2rem; margin-top: 20px;'><strong>Memorize this position and letter...</strong></p>", unsafe_allow_html=True)
-        
-        time.sleep(1.5) # Blocking sleep is okay for short flash
-        placeholder.empty()
-        
-        gs['phase'] = 'input'
-        st.rerun()
-
-    elif gs['phase'] == 'input':
-        st.write(f"Trial {gs['current_trial'] + 1} / {gs['trials_total']}")
-        
-        # Show reference grid (empty) to help with position recall
-        render_grid(0, "")  # 0 means no active position
-        st.caption("Reference grid - remember which position and letter you just saw!")
-        
-        with st.form("memory_input"):
-            st.write(f"Does this match the item **{n} steps ago**?")
-            c1, c2 = st.columns(2)
-            with c1:
-                u_pos = st.checkbox("Position Match?")
-            with c2:
-                u_let = st.checkbox("Letter Match?")
-            
-            submitted = st.form_submit_button("Submit")
-            
-            if submitted:
-                # Calculate Match Logic
-                pos_match = len(gs['pos_hist']) >= n and gs['current_pos'] == gs['pos_hist'][-n]
-                let_match = len(gs['let_hist']) >= n and gs['current_let'] == gs['let_hist'][-n]
-                
-                trial_score = 0
-                msg = []
-                
-                if u_pos == pos_match and u_let == let_match:
-                    trial_score += 5
-                    msg.append("✅ Perfect!")
-                elif u_pos == pos_match or u_let == let_match:
-                    trial_score += 2
-                    msg.append("⚠️ Partially Correct.")
-                else:
-                    msg.append("❌ Incorrect.")
-                
-                if pos_match: msg.append("(Position matched)")
-                if let_match: msg.append("(Letter matched)")
-                
-                gs['score'] += trial_score
-                gs['feedback_msg'] = " ".join(msg)
-                
-                # Append history
-                gs['pos_hist'].append(gs['current_pos'])
-                gs['let_hist'].append(gs['current_let'])
-                
-                gs['current_trial'] += 1
-                if gs['current_trial'] >= gs['trials_total']:
-                    gs['phase'] = 'end'
-                else:
-                    gs['phase'] = 'feedback'
-                st.rerun()
-
-    elif gs['phase'] == 'feedback':
-        st.info(gs['feedback_msg'])
-        time.sleep(1.5) # Show feedback briefly
-        gs['phase'] = 'show'
-        st.rerun()
-
-    elif gs['phase'] == 'end':
+    # Check if game is finished first
+    if gs.get('phase') == 'end':
         final_score = (gs['score'] / (gs['trials_total'] * 5)) * 100
         st.markdown(f"### 🏁 Session Complete! Score: {final_score:.1f}%")
         
-        if st.button("Claim XP & Return"):
+        if st.button("Claim XP & Return", type="primary"):
             total_xp = gain_xp(int(final_score * 2), 0)
             st.success(f"Gained {total_xp} XP")
             
@@ -614,6 +535,75 @@ def view_memory():
             
             st.session_state.current_view = 'menu'
             st.session_state.game_state = {}
+            st.rerun()
+        return
+    
+    current_pos = gs['current_pos']
+    current_let = gs['current_let']
+    
+    # Show trial info
+    st.write(f"**Trial {gs['current_trial'] + 1} / {gs['trials_total']}** | Level N={n}")
+    
+    # Show feedback from previous trial if any
+    if gs.get('last_feedback'):
+        st.info(gs['last_feedback'])
+    
+    st.markdown("---")
+    
+    # Always show the current grid with the active tile
+    st.markdown("### Current Position & Letter:")
+    render_grid(current_pos, current_let)
+    
+    st.markdown("---")
+    
+    # Show form for user input
+    with st.form("memory_input", clear_on_submit=True):
+        st.markdown(f"### Does the **position** or **letter** match the one from **{n} steps back**?")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            u_pos = st.checkbox("Position Matches?")
+        with c2:
+            u_let = st.checkbox("Letter Matches?")
+        
+        submitted = st.form_submit_button("Submit Answer", type="primary")
+        
+        if submitted:
+            # Calculate if matches n steps back
+            pos_match = len(gs['pos_hist']) >= n and current_pos == gs['pos_hist'][-n]
+            let_match = len(gs['let_hist']) >= n and current_let == gs['let_hist'][-n]
+            
+            trial_score = 0
+            msg = []
+            
+            if u_pos == pos_match and u_let == let_match:
+                trial_score += 5
+                msg.append("✅ Perfect!")
+            elif u_pos == pos_match or u_let == let_match:
+                trial_score += 2
+                msg.append("⚠️ Partially Correct.")
+            else:
+                msg.append("❌ Incorrect.")
+            
+            if pos_match: msg.append("(Position matched)")
+            if let_match: msg.append("(Letter matched)")
+            
+            gs['score'] += trial_score
+            gs['last_feedback'] = " ".join(msg)
+            
+            # Add current to history
+            gs['pos_hist'].append(current_pos)
+            gs['let_hist'].append(current_let)
+            
+            # Generate next position and letter or end game
+            gs['current_trial'] += 1
+            if gs['current_trial'] >= gs['trials_total']:
+                # Game finished - set phase to end
+                gs['phase'] = 'end'
+            else:
+                # Generate next trial
+                gs['current_pos'] = random.randint(1, 9)
+                gs['current_let'] = random.choice(logic.puzzles["letters"])
             st.rerun()
 
 def view_perspective():
