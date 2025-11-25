@@ -490,6 +490,14 @@ def view_logic():
     st.header("⚙️ Step Logic: Riddle Breaker")
     
     gs = st.session_state.game_state
+    # Check if the session is in the 'finished' state
+    if gs.get('phase') == 'finished':
+        if st.button("Finish Training & Return to Menu"):
+            st.session_state.current_view = 'menu'
+            st.session_state.game_state = {}
+            st.rerun()
+        return
+
     if 'active' not in gs:
         riddle, keys = random.choice(logic.puzzles["riddles"])
         gs.update({
@@ -536,11 +544,10 @@ def view_logic():
                 st.success("Logic Level Up!")
                 award_badge("Logic Legend")
                 
-            if st.button("Finish"): # Requires second click due to form
-                pass
-            st.session_state.current_view = 'menu'
-            st.session_state.game_state = {}
+            # FIX: Transition to a finished phase instead of using a button inside the form block
+            gs['phase'] = 'finished'
             st.rerun()
+
 
 def view_prompt():
     st.header("🤖 AI Prompting: Forge")
